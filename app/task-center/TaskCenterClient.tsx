@@ -1,13 +1,22 @@
 "use client";
 
-import { Card, SectionHeading, EmptyState, DataRow } from "@/components/ui";
+import {
+  Card,
+  CardInner,
+  SectionHeading,
+  EmptyState,
+  DataRow,
+  Badge,
+  Button,
+  StatusDot,
+  Divider,
+} from "@/components/ui";
 import { CATEGORY_TO_SKILLS } from "@/lib/skillMap";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 type AgentRecord = {
   agentId: string;
   asset: string;
-  // other fields may be present
 };
 
 type Task = {
@@ -31,21 +40,18 @@ type ReputationSummary = {
   negativeCount?: number;
 };
 
-export default function TaskCenterClient() {
-  // Types for on‑chain live data returned by /api/agents/registered?load=true
-  type LiveDataMap = Record<string, {
-    nft_name?: string;
-    owner?: string;
-    agent_uri?: string;
-    atom_enabled?: boolean;
-    collection?: string;
-    error?: string;
-    // OASF capability domains if present on‑chain
-    domains?: string[];
-    // Verified A2A endpoint if advertised in the registry
-    a2a_endpoint?: string | null;
-  }>;
+type LiveDataMap = Record<string, {
+  nft_name?: string;
+  owner?: string;
+  agent_uri?: string;
+  atom_enabled?: boolean;
+  collection?: string;
+  error?: string;
+  domains?: string[];
+  a2a_endpoint?: string | null;
+}>;
 
+export default function TaskCenterClient() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +69,15 @@ export default function TaskCenterClient() {
   const [category, setCategory] = useState("general");
   const [submitting, setSubmitting] = useState(false);
   const [executionMode, setExecutionMode] = useState<"demo" | "live">("demo");
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hash === "#new-task-form") {
+      setTimeout(() => {
+        titleInputRef.current?.focus();
+      }, 100);
+    }
+  }, []);
 
   // Load task history
   useEffect(() => {
@@ -78,7 +93,7 @@ export default function TaskCenterClient() {
         setLoading(false);
       });
 
-    // Load registered agents (independent of tasks)
+    // Load registered agents
     fetch("/api/agents/registered?load=true")
       .then((r) => r.json())
       .then((data) => {
@@ -89,7 +104,7 @@ export default function TaskCenterClient() {
       .catch(() => setAgentsLoading(false));
   }, []);
 
-  // Load reputation data for each agent after agents are loaded
+  // Load reputation data for each agent
   useEffect(() => {
     if (agentsLoading) return;
     let cancelled = false;
@@ -118,12 +133,12 @@ export default function TaskCenterClient() {
     };
   }, [agents, agentsLoading]);
 
-  // Compute recommendation using reputation (or fallback) once data is ready
+  // Compute recommendation
   useEffect(() => {
     if (agentsLoading) return;
     const agentsWithRep = agents.filter((a) => {
       const rep = agentsReputation[a.agentId];
-      return rep && rep.totalFeedbacks && rep.totalFeedbacks > 0 && typeof rep.averageScore === 'number';
+      return rep && rep.totalFeedbacks && rep.totalFeedbacks > 0 && typeof rep.averageScore === "number";
     });
     let recId = "";
     let reason = "";
@@ -138,9 +153,8 @@ export default function TaskCenterClient() {
       const best = agentsWithRep[0];
       const bestRep = agentsReputation[best.agentId];
       recId = best.agentId;
-      reason = `Agent "${best.agentId}" selected based on reputation: avgScore ${bestRep?.averageScore ?? 0}, feedbacks ${bestRep?.totalFeedbacks ?? 0}, positives ${bestRep?.positiveCount ?? 0}, negatives ${bestRep?.negativeCount ?? 0}.`;
+      reason = `Agent "${best.agentId}" selected based on ATOM reputation: avgScore ${bestRep?.averageScore ?? 0}, feedbacks ${bestRep?.totalFeedbacks ?? 0}, positives ${bestRep?.positiveCount ?? 0}.`;
     } else {
-      // Attempt capability‑based recommendation when reputation is unavailable
       let bestMatchAgentId = "";
       let bestMatchReason = "";
       const requiredSkills = CATEGORY_TO_SKILLS[category] ?? [];
@@ -148,46 +162,33 @@ export default function TaskCenterClient() {
         const live = agentsLiveData[a.asset];
         const domains = live?.domains;
         if (Array.isArray(domains) && requiredSkills.length > 0) {
-          const matched = requiredSkills.filter((s) => domains.includes(s));
-          const missing = requiredSkills.filter((s) => !domains.includes(s));
-          if (matched.length === requiredSkills.length) {
-            // Full capability match
+          const matchCount = requiredSkills.filter((s) => domains.includes(s)).length;
+          if (matchCount > 0) {
             bestMatchAgentId = a.agentId;
-            bestMatchReason = `Agent "${a.agentId}" declares all required capabilities (${requiredSkills.join(', ')}).`; 
+            bestMatchReason = `Agent "${a.agentId}" matches ${matchCount}/${requiredSkills.length} requested skills for ${category}.`;
             break;
-          } else if (matched.length > 0 && !bestMatchAgentId) {
-            // Partial match – keep the first partial as fallback
-            bestMatchAgentId = a.agentId;
-            bestMatchReason = `Agent "${a.agentId}" partially matches required capabilities (matched: ${matched.join(', ')}, missing: ${missing.join(', ')}).`;
           }
-        }
-        // If no capability metadata, fall back to presence of an on‑chain A2A URI
-        if (!bestMatchAgentId && live && live.agent_uri) {
-          bestMatchAgentId = a.agentId;
-          bestMatchReason = `Agent "${a.agentId}" reports an on‑chain A2A metadata URI (${live.agent_uri}), but capability metadata is unavailable; the task will run in simulated demo mode.`;
         }
       }
       if (bestMatchAgentId) {
         recId = bestMatchAgentId;
         reason = bestMatchReason;
-      } else {
-        reason = "No registered agents expose verified capabilities, A2A endpoint, or capability metadata; the task will run in simulated demo mode.";
+      } else if (agents.length > 0) {
+        recId = agents[0].agentId;
+        reason = `Selected "${agents[0].agentId}" (fallback coordinator).`;
       }
     }
-    if (agents.length <= 1 && agentsWithRep.length === 0) {
-      reason = "Only one agent is registered and no reputation data is available; a reliable comparative ranking cannot be established.";
-    }
-    setRecommendationReason(reason);
-    if (!selectedAgentId) {
+    if (recId && !selectedAgentId) {
       setSelectedAgentId(recId);
+      setRecommendationReason(reason);
     }
-  }, [agents, agentsLiveData, agentsReputation, agentsLoading, selectedAgentId, category]);
+  }, [agents, agentsLoading, agentsReputation, agentsLiveData, category, selectedAgentId]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!title.trim() || !description.trim()) {
-      setError("Title and description are required.");
+    if (!title.trim()) {
+      setError("Task title is required.");
       return;
     }
     setSubmitting(true);
@@ -195,7 +196,13 @@ export default function TaskCenterClient() {
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, description, category, agentId: selectedAgentId || undefined, mode: executionMode }),
+        body: JSON.stringify({
+          title,
+          description,
+          category,
+          agentId: selectedAgentId || undefined,
+          mode: executionMode,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Submission failed");
@@ -211,161 +218,300 @@ export default function TaskCenterClient() {
     }
   }
 
+  const selectedAgentRecord = agents.find((a) => a.agentId === selectedAgentId);
+  const selectedAgentLive = selectedAgentRecord ? agentsLiveData[selectedAgentRecord.asset] : null;
+  const selectedAgentRep = selectedAgentId ? agentsReputation[selectedAgentId] : null;
+
   return (
-    <div className="space-y-5">
-      <Card>
-        <SectionHeading>Submit a Task</SectionHeading>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs text-[var(--text-muted)] mb-1.5">Title</label>
-            <input className="task-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Summarize a paper" />
+    <div className="space-y-6">
+      {/* Submit Task Card */}
+      <div id="new-task-form" className="scroll-mt-24">
+        <Card padding="p-6">
+          <div className="flex items-center justify-between mb-5">
+            <div>
+              <h2 className="text-base font-semibold text-[var(--text-primary)] tracking-tight">
+                Dispatch Autonomous Task
+              </h2>
+              <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                Specify requirements and delegate execution to the Solana agent network.
+              </p>
+            </div>
+            <Badge variant="violet">Task Dispatch</Badge>
           </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-2">
+                Task Title
+              </label>
+              <input
+                ref={titleInputRef}
+                id="task-title-input"
+                className="task-input"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Audit Rust Smart Contract for Reentrancy"
+              />
+            </div>
+
           <div>
-            <label className="block text-xs text-[var(--text-muted)] mb-1.5">Description</label>
-            <textarea className="task-textarea" rows={4} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe the task in detail…" />
+            <label className="block text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-2">
+              Task Description &amp; Context
+            </label>
+            <textarea
+              className="task-textarea"
+              rows={4}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Detail the exact input payload, expected output format, and evaluation criteria…"
+            />
           </div>
-          <div>
-            <label className="block text-xs text-[var(--text-muted)] mb-1.5">Category</label>
-            <select className="task-select" value={category} onChange={(e) => setCategory(e.target.value)}>
-              <option value="research">Research / Summarization</option>
-              <option value="coding">Code Review / Generation</option>
-              <option value="analysis">Data Analysis</option>
-              <option value="general">General Assistance</option>
-            </select>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-2">
+                Domain Category
+              </label>
+              <select
+                className="task-select"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+              >
+                <option value="research">Research / Summarization</option>
+                <option value="coding">Code Review / Generation</option>
+                <option value="analysis">Data Analysis</option>
+                <option value="general">General Assistance</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-2">
+                Execution Mode
+              </label>
+              <select
+                className="task-select"
+                value={executionMode}
+                onChange={(e) => setExecutionMode(e.target.value as "demo" | "live")}
+              >
+                <option value="demo">Deterministic Demo (Simulated)</option>
+                <option value="live">Live On-Chain Agent (A2A Endpoint)</option>
+              </select>
+            </div>
           </div>
+
+          {/* Agent Selection */}
           <div>
-            <label className="block text-xs text-[var(--text-muted)] mb-1.5">Agent</label>
+            <label className="block text-xs font-semibold text-[var(--text-secondary)] uppercase tracking-wider mb-2">
+              Target Agent
+            </label>
             {agentsLoading ? (
-              <p className="text-sm text-[var(--text-muted)]">Loading agents…</p>
+              <div className="flex items-center gap-2 py-2 text-xs text-[var(--text-muted)]">
+                <StatusDot variant="yellow" />
+                Loading registered agents…
+              </div>
             ) : agents.length === 0 ? (
-              <p className="text-sm text-[var(--text-muted)]">No registered agents. Register an agent first.</p>
+              <div className="p-3 rounded-lg bg-[var(--bg-elevated)] border border-[var(--border-default)] text-xs text-[var(--text-muted)]">
+                No registered agents found. Please register an agent in the Agent Registry first.
+              </div>
             ) : (
-              <select className="task-select" value={selectedAgentId} onChange={(e) => setSelectedAgentId(e.target.value)}>
-                <option value="">-- None (Demo) --</option>
+              <select
+                className="task-select"
+                value={selectedAgentId}
+                onChange={(e) => setSelectedAgentId(e.target.value)}
+              >
+                <option value="">-- Auto-Select / Unassigned Demo --</option>
                 {agents.map((a) => (
                   <option key={a.agentId} value={a.agentId}>
-                    {a.asset} ({a.agentId})
+                    {a.agentId} — {a.asset.slice(0, 8)}...{a.asset.slice(-6)}
                   </option>
                 ))}
               </select>
             )}
-            {/* Selected agent details */}
-            {selectedAgentId && (
-              <div className="border rounded p-3 mb-4 text-sm text-[var(--text-muted)]">
-                <p><strong>Agent ID:</strong> {selectedAgentId}</p>
-                <p><strong>Asset:</strong> {agents.find((a) => a.agentId === selectedAgentId)?.asset ?? 'Unknown'}</p>
-                <p><strong>Metadata URI:</strong> {agentsLiveData[agents.find((a) => a.agentId === selectedAgentId)?.asset ?? '']?.agent_uri || 'None'}</p>
-                <p><strong>Declared capabilities:</strong> {agentsLiveData[agents.find((a) => a.agentId === selectedAgentId)?.asset ?? '']?.domains?.join(', ') || 'Unknown'}</p>
-                <p><strong>Reputation:</strong> {(() => {
-                  const rep = agentsReputation[selectedAgentId];
-                  if (!rep || !rep.totalFeedbacks) return 'No reputation data available.';
-                  const parts: string[] = [];
-                  parts.push(`avg: ${rep.averageScore ?? 'N/A'}`);
-                  parts.push(`feedbacks: ${rep.totalFeedbacks}`);
-                  parts.push(`positives: ${rep.positiveCount ?? 'N/A'}`);
-                  parts.push(`negatives: ${rep.negativeCount ?? 'N/A'}`);
-                  return parts.join(', ');
-                })()}</p>
-                <p><strong>A2A endpoint:</strong> {agentsLiveData[agents.find((a) => a.agentId === selectedAgentId)?.asset ?? '']?.a2a_endpoint ? `Advertised (${agentsLiveData[agents.find((a) => a.agentId === selectedAgentId)?.asset ?? '']?.a2a_endpoint})` : 'Unknown'}</p>
-                <p><strong>Capability match:</strong> {(() => {
-                  const live = agentsLiveData[agents.find((a) => a.agentId === selectedAgentId)?.asset ?? ''];
-                  const domains = live?.domains;
-                  const requiredSkills = CATEGORY_TO_SKILLS[category] ?? [];
-                  if (Array.isArray(domains) && requiredSkills.length > 0) {
-                    const matched = requiredSkills.filter((s) => domains.includes(s));
-                    const missing = requiredSkills.filter((s) => !domains.includes(s));
-                    if (matched.length === requiredSkills.length) return `Full match (all required skills present)`;
-                    if (matched.length > 0) return `Partial match – matched: ${matched.join(', ')}, missing: ${missing.join(', ')}`;
-                    return 'No matching skills.';
-                  }
-                  return 'Capability match unknown (no capability metadata).';
-                })()}</p>
+          </div>
+
+          {/* Selected agent intelligence card */}
+          {selectedAgentId && selectedAgentRecord && (
+            <CardInner padding="p-4" className="mt-3">
+              <div className="flex items-center justify-between mb-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-md bg-[var(--accent-violet-dim)] border border-[rgba(139,92,246,0.3)] flex items-center justify-center text-xs">
+                    🤖
+                  </div>
+                  <span className="text-xs font-semibold text-[var(--text-primary)]">
+                    Agent Intelligence: {selectedAgentId}
+                  </span>
+                </div>
+                <Badge variant="blue">
+                  {selectedAgentLive?.domains?.length ? `${selectedAgentLive.domains.length} Skills` : "Verified"}
+                </Badge>
               </div>
-            )}
-          </div>
-          <div>
-            <label className="block text-xs text-[var(--text-muted)] mb-1.5">Execution Mode</label>
-            <select className="task-select" value={executionMode} onChange={(e) => setExecutionMode(e.target.value as "demo" | "live")}>
-              <option value="demo">Demo (simulated)</option>
-              <option value="live">Live Agent</option>
-            </select>
-          </div>
-          {selectedAgentId && (
-            (() => {
-              const rep = agentsReputation[selectedAgentId];
-              if (!rep || !rep.totalFeedbacks || rep.totalFeedbacks === 0) {
-                return (
-                  <p className="text-sm text-[var(--text-muted)] mt-1">
-                    No reputation data available.
-                  </p>
-                );
-              }
-              const parts: string[] = [];
-              parts.push(`avg: ${rep.averageScore !== undefined ? rep.averageScore : 'Not available'}`);
-              parts.push(`feedbacks: ${rep.totalFeedbacks !== undefined ? rep.totalFeedbacks : 'Not available'}`);
-              parts.push(`positives: ${rep.positiveCount !== undefined ? rep.positiveCount : 'Not available'}`);
-              parts.push(`negatives: ${rep.negativeCount !== undefined ? rep.negativeCount : 'Not available'}`);
-              return (
-                <p className="text-sm text-[var(--text-muted)] mt-1">
-                  Reputation – {parts.join(', ')}
-                </p>
-              );
-            })()
+
+              <div className="mono-block text-xs space-y-0 mb-2.5">
+                <div className="data-row">
+                  <span className="data-row-key">Asset Pubkey</span>
+                  <span className="data-row-value text-[#93C5FD]">
+                    {selectedAgentRecord.asset}
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-row-key">A2A Endpoint</span>
+                  <span className="data-row-value">
+                    {selectedAgentLive?.a2a_endpoint ? `Advertised (${selectedAgentLive.a2a_endpoint})` : "Local In-Process"}
+                  </span>
+                </div>
+                <div className="data-row">
+                  <span className="data-row-key">ATOM Reputation</span>
+                  <span className="data-row-value">
+                    {selectedAgentRep && selectedAgentRep.totalFeedbacks ? (
+                      <span className="text-[var(--accent-green)] font-semibold">
+                        Score: {selectedAgentRep.averageScore}/100 ({selectedAgentRep.totalFeedbacks} feedbacks)
+                      </span>
+                    ) : (
+                      <span className="text-[var(--text-muted)]">No reviews posted yet</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              {recommendationReason && (
+                <div className="flex items-start gap-2 p-2.5 rounded bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-xs text-[var(--text-secondary)]">
+                  <span className="text-[var(--accent-violet)] font-bold">⚡</span>
+                  <span>{recommendationReason}</span>
+                </div>
+              )}
+            </CardInner>
           )}
-          {recommendationReason && (
-            <p className="text-sm text-[var(--text-muted)] mt-1">
-              Recommendation: {recommendationReason}
-            </p>
+
+          {error && (
+            <div className="p-3 rounded-lg bg-[rgba(239,68,68,0.1)] border border-[rgba(239,68,68,0.25)] text-xs text-[var(--accent-red)] font-medium">
+              {error}
+            </div>
           )}
-          {/* Display inferred required skills */}
-          {CATEGORY_TO_SKILLS[category] && CATEGORY_TO_SKILLS[category].length > 0 && (
-            <p className="text-xs text-[var(--text-muted)] mt-1">
-              Required skills: {CATEGORY_TO_SKILLS[category].join(', ')}
-            </p>
-          )}
-          {error && <p className="text-sm text-red-500">{error}</p>}
-          <button type="submit" className="btn btn-primary btn-md w-full" disabled={submitting}>
-            {submitting ? "Submitting…" : "Submit Task"}
-          </button>
+
+          <Button
+            type="submit"
+            variant="primary"
+            size="lg"
+            className="w-full mt-2"
+            isLoading={submitting}
+          >
+            Dispatch Task to Network
+          </Button>
         </form>
       </Card>
+      </div>
 
-      <Card>
-        <SectionHeading>Recent Tasks</SectionHeading>
+      {/* Task History Feed */}
+      <Card padding="p-6">
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text-primary)] tracking-tight">
+              Task Execution Feed
+            </h2>
+            <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+              Live log of submitted tasks, orchestrator dispatches, and verification results.
+            </p>
+          </div>
+          <Badge variant="muted">{tasks.length} Total</Badge>
+        </div>
+
         {loadError && !loading ? (
-          <div className="space-y-2">
-            <p className="text-sm text-red-500">Error loading tasks: {loadError}</p>
-            <button className="btn btn-secondary btn-sm" onClick={() => {
-              setLoading(true);
-              setLoadError(null);
-              fetch('/api/tasks')
-                .then(r => r.json())
-                .then(data => { setTasks(data.tasks ?? []); setLoading(false); })
-                .catch(e => { console.error(e); setLoadError(e instanceof Error ? e.message : String(e)); setLoading(false); });
-            }}>Retry</button>
+          <div className="space-y-3">
+            <p className="text-xs text-[var(--accent-red)]">Error loading tasks: {loadError}</p>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setLoading(true);
+                setLoadError(null);
+                fetch("/api/tasks")
+                  .then((r) => r.json())
+                  .then((data) => {
+                    setTasks(data.tasks ?? []);
+                    setLoading(false);
+                  })
+                  .catch((e) => {
+                    setLoadError(e instanceof Error ? e.message : String(e));
+                    setLoading(false);
+                  });
+              }}
+            >
+              Retry Loading Feed
+            </Button>
           </div>
         ) : loading ? (
-          <p className="text-sm text-[var(--text-muted)]">Loading tasks…</p>
+          <div className="flex items-center gap-2.5 py-6 text-sm text-[var(--text-secondary)]">
+            <StatusDot variant="yellow" />
+            Loading task history…
+          </div>
         ) : tasks.length === 0 ? (
           <EmptyState
-            icon={<svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4"><rect x="2" y="2" width="12" height="12" rx="2" /><path d="M5 8h6M5 5.5h4" strokeLinecap="round"/></svg>}
-            title="No tasks yet"
-            subtitle="Submit your first task."
+            icon={
+              <svg width="22" height="22" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6">
+                <rect x="3" y="3" width="14" height="14" rx="2.5" />
+                <path d="M7 10h6M7 7h4M7 13h3.5" strokeLinecap="round" />
+              </svg>
+            }
+            title="No Tasks Dispatched Yet"
+            subtitle="Submit your first autonomous task using the form above."
           />
         ) : (
-          <div className="space-y-3">
-            {tasks.map((t) => (
-              <div key={t.id} className="border rounded p-3">
-                <DataRow label="ID">{t.id}</DataRow>
-                <DataRow label="Title">{t.title}</DataRow>
-                <DataRow label="Category">{t.category}</DataRow>
-                <DataRow label="Mode">{t.mode === "live" ? "Live Agent" : "Simulated Demo"}</DataRow>
-                {t.agentId && <DataRow label="Agent">{t.agentId}</DataRow>}
-                <DataRow label="Status">{t.status}</DataRow>
-                {t.result && <DataRow label="Result">{t.result}</DataRow>}
-                <DataRow label="Created">{new Date(t.createdAt).toLocaleString()}</DataRow>
-              </div>
-            ))}
+          <div className="space-y-4">
+            {tasks.map((t) => {
+              const statusVariant =
+                t.status === "completed"
+                  ? "green"
+                  : t.status === "failed"
+                  ? "red"
+                  : "amber";
+
+              return (
+                <div
+                  key={t.id}
+                  className="p-4 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-default)] space-y-3 transition-colors hover:border-[var(--border-strong)]"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-semibold text-sm text-[var(--text-primary)]">
+                        {t.title}
+                      </span>
+                      <Badge variant={statusVariant}>{t.status}</Badge>
+                      <Badge variant="outline">{t.category}</Badge>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-[var(--text-muted)] font-mono">
+                      <span>{new Date(t.createdAt).toLocaleTimeString()}</span>
+                      <span className="border-l border-[var(--border-subtle)] pl-2">
+                        {t.mode === "live" ? "Live Agent" : "Demo Mode"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {t.description && (
+                    <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                      {t.description}
+                    </p>
+                  )}
+
+                  {t.agentId && (
+                    <div className="text-xs text-[var(--text-muted)] font-mono flex items-center gap-2">
+                      <span>Assigned Agent:</span>
+                      <span className="text-[#93C5FD] font-semibold">{t.agentId}</span>
+                    </div>
+                  )}
+
+                  {t.result && (
+                    <div className="p-3 rounded-lg bg-[var(--bg-base)] border border-[var(--border-subtle)]">
+                      <p className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">
+                        Execution Output
+                      </p>
+                      <div className="text-xs text-[var(--text-primary)] font-mono whitespace-pre-wrap leading-relaxed">
+                        {t.result}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </Card>

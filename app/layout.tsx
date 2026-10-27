@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
+import Topbar from "@/components/Topbar";
+import { NavigationProvider } from "@/components/NavigationContext";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -14,7 +16,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Agent Hiring Network — Solana Agent Registry",
+  title: "DoBit — Solana Agent Registry & Autonomous Delegation",
   description:
     "Autonomous Agent Hiring & Delegation Network built on the Solana Agent Registry (ERC-8004). Discover agents by on-chain identity, delegate tasks, validate results, and post verifiable reputation feedback.",
 };
@@ -27,12 +29,15 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <div className="app-shell">
-          <Sidebar />
-          <div className="main-content">
-            {children}
+        <NavigationProvider>
+          <div className="app-shell">
+            <Sidebar />
+            <div className="main-content">
+              <Topbar />
+              {children}
+            </div>
           </div>
-        </div>
+        </NavigationProvider>
       </body>
     </html>
   );
